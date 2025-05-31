@@ -1,0 +1,95 @@
+# config.yaml
+
+# 🔧 What Each Section Triggers
+#
+# | YAML Section          | Triggers Functionality                       |
+# | --------------------- | -------------------------------------------- |
+# | `engine`              | `parse_config()` + `validate_config()`       |
+# | `plugins`             | `init_plugins()`                             |
+# | `sources`             | `start_all_schedulers()` + `schedule_task()` |
+# | `pipeline.transforms` | `process_event()` with transforms            |
+# | `pipeline.outputs`    | `process_event()` with output targets        |
+#
+# This structure ensures each Rust module/function only needs to parse its relevant piece,
+# invoke the right adapter/trait, and execute cleanly.
+
+# STEP 1 & 2: CONFIG LOADER & VALIDATOR
+# -------------------------------------
+# This is the main structure that will be loaded and validated
+engine:
+  version: 1.0
+  plugins_enabled: true
+  schedule_interval: 30s
+
+# STEP 3: PLUGIN INITIALIZER
+# --------------------------
+plugins:
+  - name: enrich_user
+    type: python
+    path: ./plugins/enrich_user.py
+  - name: geo_ip_lookup
+    type: js
+    path: ./plugins/geo_lookup.js
+
+# STEP 4 & 5: SCHEDULER + SOURCE DEFINITION
+# -----------------------------------------
+sources:
+  - id: github_events
+    type: api
+    interval: 60s
+    request:
+      method: GET
+      url: "https://api.github.com/events"
+      headers:
+        Authorization: "Bearer {{GITHUB_TOKEN}}"
+    response_path: "$[*]" # Use JSONPath to extract event list from response
+
+  - id: user_events_webhook
+    type: webhook
+    listen_port: 8080
+    path: "/webhooks/user_events"
+
+# STEP 6: PIPELINE PROCESSING
+# ---------------------------
+pipeline:
+  transforms:
+    - type: filter
+      id: only_push_events
+      field: type
+      op: equals
+      value: "PushEvent"
+
+    - type: rename
+      map:
+        actor.login: user
+        repo.name: repository
+
+    - type: add_fields
+      fields:
+        received_at: "{{now}}"
+        processed_by: "ChronicStream"
+
+    - type: plugin
+      name: enrich_user
+
+  outputs:
+    - type: webhook
+      id: discord_logger
+      url: "https://discord.com/api/webhooks/XXXX/YYY"
+      headers:
+        Content-Type: "application/json"
+
+    - type: postgres
+      id: event_logger_db
+      connection:
+        host: "localhost"
+        port: 5432
+        db: "events"
+        user: "streamer"
+        password: "secret"
+      table: "github_events"
+      field_mapping:
+        user: "username"
+        repository: "repo_name"
+        type: "event_type"
+        received_at: "timestamp"
