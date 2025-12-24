@@ -1,4 +1,5 @@
 mod config;
+mod schedulers;
 
 use config::parse_config;
 use std::env;
